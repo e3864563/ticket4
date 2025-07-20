@@ -11,7 +11,7 @@ TEAMEAR_URLS = [
     "https://teamear.tixcraft.com/ticket/area/25_crowdticc/19970", 
 ]
 
-DISCORD_WEBHOOK_URL_MAIN = "你的Webhook網址"
+DISCORD_WEBHOOK_URL_MAIN = "https://discord.com/api/webhooks/1371436288330436618/_WsfwLwakJLC1vW7g01iZcDzPTiSnxhR4ijRv0gtsxv4Yo27J49Dx8zubkZqb_m-GW00"
 
 last_sent_tickets = {
     'TEAMEAR': {}
