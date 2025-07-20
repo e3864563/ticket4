@@ -1,0 +1,132 @@
+import aiohttp
+import asyncio
+import time
+import os
+import sys
+import re
+from datetime import datetime, timedelta
+
+TEAMEAR_URLS = [ 
+    "https://teamear.tixcraft.com/ticket/area/25_crowdticc/19969", 
+    "https://teamear.tixcraft.com/ticket/area/25_crowdticc/19970", 
+]
+
+DISCORD_WEBHOOK_URL_MAIN = "你的Webhook網址"
+
+last_sent_tickets = {
+    'TEAMEAR': {}
+}
+
+headers = {
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+    "Accept-Encoding": "gzip, deflate, br, zstd",
+    "Accept-Language": "zh-TW,zh;q=0.9,en-US;q=0.8,en;q=0.7,ja;q=0.6",
+    "Cache-Control": "max-age=0",
+    "Priority": "u=0, i",
+    "Referer": "https://teamear.tixcraft.com/activity/detail/25_crowdticc",
+    "Sec-CH-UA": '"Not)A;Brand";v="8", "Chromium";v="138", "Google Chrome";v="138"',
+    "Sec-CH-UA-Mobile": "?0",
+    "Sec-CH-UA-Platform": '"Windows"',
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "same-origin",
+    "Sec-Fetch-User": "?1",
+    "Upgrade-Insecure-Requests": "1",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36"
+}
+
+def normalize_ticket_text(text: str) -> str:
+    return re.sub(r'\s+', '', text.strip())
+
+def extract_event_title(html, event_id):
+    pattern = r'<option value="(\d+)"( selected="")?>(.*?)</option>'
+    matches = re.findall(pattern, html)
+    for value, selected, text in matches:
+        if value == event_id:
+            title = text.replace("&lt;", "<").replace("&gt;", ">").strip()
+            return title
+    return f"活動 {event_id}"
+
+def build_embed(platform, event_title, url, available_tickets):
+    now = datetime.now() + timedelta(hours=8)
+    return {
+        "description": f"🔥**清票啦（{platform}）**",
+        "color": 0xFFA500,
+        "fields": [
+            {"name": "🎤 場次名稱：", "value": event_title, "inline": False},
+            {"name": "🔗 網站：", "value": f"[點我前往購票]({url})", "inline": False},
+            {"name": "🎟️ 可購買的票區", "value": "\n".join(available_tickets) if available_tickets else "無可購買票區", "inline": False},
+            {"name": "", "value": f"⏰更新時間：{now.strftime('%Y-%m-%d %H:%M:%S')}", "inline": False}
+        ],
+    }
+
+async def send_single_message(session, url, payload):
+    try:
+        async with session.post(url, json=payload) as response:
+            if response.status == 204:
+                print(f"✅ 成功發送到: {url}")
+            else:
+                error_text = await response.text()
+                print(f"❌ 發送失敗 ({url}) 狀態碼: {response.status}，訊息: {error_text}")
+    except aiohttp.ClientError as e:
+        print(f"❌ 發送錯誤 ({url}): {e}")
+
+async def send_discord_message(session, embed, urls=None):
+    payload = {
+        "username": "🚨【清票搶購】票務小幫手🚨",
+        "embeds": [embed]
+    }
+    if urls is None:
+        urls = [DISCORD_WEBHOOK_URL_MAIN]
+
+    tasks = [send_single_message(session, url, payload) for url in urls]
+    await asyncio.gather(*tasks)
+
+async def check_teamear_single(session, url):
+    url_key = url.split("/")[-1]
+
+    while True:
+        try:
+            async with session.get(url, headers=headers, timeout=10) as response:
+                html = await response.text()
+
+            event_title = extract_event_title(html, url_key)
+
+            # 抓票區狀態，避開身障，且過濾掉含"已售完"的
+            pattern = r'<font color="#AAAAAA">(.*?)</font>'
+            tickets = re.findall(pattern, html)
+            tickets = [t for t in tickets if "身障" not in t and "已售完" not in t]
+
+            normalized = [normalize_ticket_text(t) for t in tickets]
+
+            if url_key not in last_sent_tickets['TEAMEAR']:
+                last_sent_tickets['TEAMEAR'][url_key] = normalized
+                print(f"[{url_key}] 首次抓取 {event_title}:")
+                for t in tickets:
+                    print("  " + t)
+            elif normalized != last_sent_tickets['TEAMEAR'][url_key]:
+                print(f"\n🔔 [{url_key}] {event_title} 有變化！")
+                for t in tickets:
+                    print("  " + t)
+
+                embed = build_embed("Teamear", event_title, url, tickets)
+                await send_discord_message(session, embed)
+
+                last_sent_tickets['TEAMEAR'][url_key] = normalized
+
+        except Exception as e:
+            print(f"⚠️ [{url_key}] 發生錯誤: {e}")
+
+        await asyncio.sleep(1)
+
+
+async def main():
+    try:
+        async with aiohttp.ClientSession() as session:
+            tasks = [check_teamear_single(session, url) for url in TEAMEAR_URLS]
+            await asyncio.gather(*tasks)
+    except Exception as e:
+        print(f"⚠️ 主程式錯誤: {e}")
+
+if __name__ == "__main__":
+    asyncio.run(main())
