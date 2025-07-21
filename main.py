@@ -92,10 +92,16 @@ async def check_teamear_single(session, url):
 
             event_title = extract_event_title(html, url_key)
 
-            # 抓票區狀態，避開身障，且過濾掉含"已售完"的
-            pattern = r'<font color="#AAAAAA">(.*?)</font>'
-            tickets = re.findall(pattern, html)
-            tickets = [t for t in tickets if "身障" not in t and "已售完" not in t]
+            # 修正：抓所有票區，過濾掉身障與已售完
+            pattern = r'<li>.*?<font.*?>(.*?)</font>'
+            matches = re.findall(pattern, html, re.DOTALL)
+
+            tickets = []
+            for t in matches:
+                if "身障" in t:
+                    continue
+                if "已售完" not in t:
+                    tickets.append(t.strip())
 
             normalized = [normalize_ticket_text(t) for t in tickets]
 
