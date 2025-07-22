@@ -38,6 +38,15 @@ headers = {
 def normalize_ticket_text(text: str) -> str:
     return re.sub(r'\s+', '', text.strip())
 
+def parse_ticket_status(t: str):
+    t = normalize_ticket_text(t)
+    if "已售完" in t:
+        return "soldout"
+    elif "剩餘" in t:
+        return "available"
+    else:
+        return "unknown"
+
 def extract_event_title(html, event_id):
     pattern = r'<option value="(\d+)"( selected="")?>(.*?)</option>'
     matches = re.findall(pattern, html)
@@ -85,6 +94,8 @@ async def send_discord_message(session, embed, urls=None):
 async def check_teamear_single(session, url):
     url_key = url.split("/")[-1]
 
+    first_check = True
+
     while True:
         try:
             async with session.get(url, headers=headers, timeout=10) as response:
@@ -92,39 +103,47 @@ async def check_teamear_single(session, url):
 
             event_title = extract_event_title(html, url_key)
 
-            # 修正：抓所有票區，過濾掉身障與已售完
             pattern = r'<li>.*?<font.*?>(.*?)</font>'
             matches = re.findall(pattern, html, re.DOTALL)
 
-            tickets = []
+            changed = False
+            tickets_for_notify = []
+
+            if url_key not in last_sent_tickets['TEAMEAR']:
+                last_sent_tickets['TEAMEAR'][url_key] = {}
+
+            if first_check:
+                print(f"[首次初始化] {event_title}")
+
             for t in matches:
                 if "身障" in t:
                     continue
-                if "已售完" not in t:
-                    tickets.append(t.strip())
 
-            normalized = [normalize_ticket_text(t) for t in tickets]
+                ticket_name = normalize_ticket_text(t)
+                status = parse_ticket_status(t)
 
-            if url_key not in last_sent_tickets['TEAMEAR']:
-                last_sent_tickets['TEAMEAR'][url_key] = normalized
-                print(f"[{url_key}] 首次抓取 {event_title}:")
-                for t in tickets:
-                    print("  " + t)
-            elif normalized != last_sent_tickets['TEAMEAR'][url_key]:
-                print(f"\n🔔 [{url_key}] {event_title} 有變化！")
-                for t in tickets:
-                    print("  " + t)
+                last_status = last_sent_tickets['TEAMEAR'][url_key].get(ticket_name)
 
-                embed = build_embed("Teamear", event_title, url, tickets)
+                if first_check:
+                    print(f"  {t.strip()}")
+                else:
+                    if last_status != status:
+                        changed = True
+                        tickets_for_notify.append(t)
+                        print(f"🔔 [{url_key}] {event_title} | {ticket_name} 狀態變化: {last_status} ➔ {status}")
+
+                last_sent_tickets['TEAMEAR'][url_key][ticket_name] = status
+
+            if changed and not first_check:
+                embed = build_embed("Teamear", event_title, url, tickets_for_notify)
                 await send_discord_message(session, embed)
 
-                last_sent_tickets['TEAMEAR'][url_key] = normalized
+            first_check = False
 
         except Exception as e:
             print(f"⚠️ [{url_key}] 發生錯誤: {e}")
 
         await asyncio.sleep(1)
-
 
 async def main():
     try:
