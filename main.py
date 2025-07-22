@@ -1,6 +1,7 @@
 import aiohttp
 import asyncio
 import re
+import html
 from datetime import datetime, timedelta
 
 TEAMEAR_URLS = [ 
@@ -31,7 +32,6 @@ headers = {
 }
 
 def normalize_ticket_text(text: str) -> str:
-    # 只去除前後空白，不刪除中間空白，保留「剩餘 2」格式方便判斷
     return text.strip()
 
 def parse_ticket_status(t: str):
@@ -42,16 +42,16 @@ def parse_ticket_status(t: str):
     else:
         return "unknown"
 
-def extract_event_title(html):
+def extract_event_title(html_text):
     pattern = r'<select id="gameId".*?>(.*?)</select>'
-    select_match = re.search(pattern, html, re.DOTALL)
+    select_match = re.search(pattern, html_text, re.DOTALL)
     if not select_match:
         return "未知場次"
     select_content = select_match.group(1)
     option_pattern = r'<option value=".*?" selected>(.*?)</option>'
     option_match = re.search(option_pattern, select_content, re.DOTALL)
     if option_match:
-        return option_match.group(1).replace("&lt;", "<").replace("&gt;", ">").strip()
+        return html.unescape(option_match.group(1)).strip()
     return "未知場次"
 
 def build_embed(platform, event_title, url, available_tickets):
@@ -83,17 +83,17 @@ async def check_teamear_single(session, url):
     while True:
         try:
             async with session.get(url, headers=headers, timeout=10) as resp:
-                html = await resp.text()
+                html_text = await resp.text()
 
-            event_title = extract_event_title(html)
+            event_title = extract_event_title(html_text)
 
-            # 剩餘票區（class="select_form_b"）取票名、剩餘數字
+            # 剩餘票區（class="select_form_b"）
             pattern_available = r'<li class="select_form_b">.*?<a.*?>(.*?)</a>'
-            matches_available = re.findall(pattern_available, html, re.DOTALL)
+            matches_available = re.findall(pattern_available, html_text, re.DOTALL)
 
             # 已售完票區（不含 class="select_form_b"）
             pattern_soldout = r'<li(?! class="select_form_b").*?<font.*?>(.*?)</font>'
-            matches_soldout = re.findall(pattern_soldout, html, re.DOTALL)
+            matches_soldout = re.findall(pattern_soldout, html_text, re.DOTALL)
 
             all_tickets = []
             tickets_for_notify = []
@@ -101,14 +101,15 @@ async def check_teamear_single(session, url):
             for t in matches_available:
                 if "身障" in t:
                     continue
-                cleaned = re.sub(r'<.*?>', '', t).strip()
+                cleaned = html.unescape(re.sub(r'<.*?>', '', t).strip())
                 all_tickets.append(cleaned)
                 tickets_for_notify.append(cleaned)
 
             for t in matches_soldout:
                 if "身障" in t:
                     continue
-                all_tickets.append(t.strip())
+                cleaned = html.unescape(t.strip())
+                all_tickets.append(cleaned)
 
             if url_key not in last_sent_tickets['TEAMEAR']:
                 last_sent_tickets['TEAMEAR'][url_key] = {}
@@ -120,7 +121,6 @@ async def check_teamear_single(session, url):
                 for ticket in all_tickets:
                     print(f"  {ticket}")
 
-                # 首次初始化，不發通知，但記錄狀態
                 for ticket in all_tickets:
                     ticket_name = normalize_ticket_text(ticket)
                     status = parse_ticket_status(ticket)
