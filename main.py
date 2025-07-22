@@ -11,7 +11,7 @@ TEAMEAR_URLS = [
     "https://teamear.tixcraft.com/ticket/area/25_crowdticc/19970", 
 ]
 
-DISCORD_WEBHOOK_URL_MAIN = "https://discord.com/api/webhooks/1376944537142034512/llRKwpmLteNX-uID94ns2m2cppeeIyx_la2jU5225WoBCTT3GHMOU8YBzJNhefxHUg5A"
+DISCORD_WEBHOOK_URL_MAIN = "https://discord.com/api/webhooks/1371436288330436618/_WsfwLwakJLC1vW7g01iZcDzPTiSnxhR4ijRv0gtsxv4Yo27J49Dx8zubkZqb_m-GW00"
 
 last_sent_tickets = {
     'TEAMEAR': {}
@@ -47,14 +47,23 @@ def parse_ticket_status(t: str):
     else:
         return "unknown"
 
-def extract_event_title(html, event_id):
-    pattern = r'<option value="(\d+)"( selected="")?>(.*?)</option>'
-    matches = re.findall(pattern, html)
-    for value, selected, text in matches:
-        if value == event_id:
-            title = text.replace("&lt;", "<").replace("&gt;", ">").strip()
-            return title
-    return f"活動 {event_id}"
+def extract_event_title(html):
+    pattern = r'<select id="gameId".*?>(.*?)</select>'
+    select_match = re.search(pattern, html, re.DOTALL)
+
+    if not select_match:
+        return "未知場次"
+
+    select_content = select_match.group(1)
+
+    option_pattern = r'<option value=".*?" selected>(.*?)</option>'
+    option_match = re.search(option_pattern, select_content, re.DOTALL)
+
+    if option_match:
+        text = option_match.group(1)
+        return text.replace("&lt;", "<").replace("&gt;", ">").strip()
+
+    return "未知場次"
 
 def build_embed(platform, event_title, url, available_tickets):
     now = datetime.now() + timedelta(hours=8)
@@ -101,7 +110,7 @@ async def check_teamear_single(session, url):
             async with session.get(url, headers=headers, timeout=10) as response:
                 html = await response.text()
 
-            event_title = extract_event_title(html, url_key)
+            event_title = extract_event_title(html)
 
             pattern = r'<li>.*?<font.*?>(.*?)</font>'
             matches = re.findall(pattern, html, re.DOTALL)
