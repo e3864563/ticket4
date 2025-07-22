@@ -1,8 +1,5 @@
 import aiohttp
 import asyncio
-import time
-import os
-import sys
 import re
 from datetime import datetime, timedelta
 
@@ -13,9 +10,7 @@ TEAMEAR_URLS = [
 
 DISCORD_WEBHOOK_URL_MAIN = "https://discord.com/api/webhooks/1371436288330436618/_WsfwLwakJLC1vW7g01iZcDzPTiSnxhR4ijRv0gtsxv4Yo27J49Dx8zubkZqb_m-GW00"
 
-last_sent_tickets = {
-    'TEAMEAR': {}
-}
+last_sent_tickets = {'TEAMEAR': {}}
 
 headers = {
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
@@ -36,10 +31,10 @@ headers = {
 }
 
 def normalize_ticket_text(text: str) -> str:
-    return re.sub(r'\s+', '', text.strip())
+    # 只去除前後空白，不刪除中間空白，保留「剩餘 2」格式方便判斷
+    return text.strip()
 
 def parse_ticket_status(t: str):
-    t = normalize_ticket_text(t)
     if "已售完" in t:
         return "soldout"
     elif "剩餘" in t:
@@ -50,19 +45,13 @@ def parse_ticket_status(t: str):
 def extract_event_title(html):
     pattern = r'<select id="gameId".*?>(.*?)</select>'
     select_match = re.search(pattern, html, re.DOTALL)
-
     if not select_match:
         return "未知場次"
-
     select_content = select_match.group(1)
-
     option_pattern = r'<option value=".*?" selected>(.*?)</option>'
     option_match = re.search(option_pattern, select_content, re.DOTALL)
-
     if option_match:
-        text = option_match.group(1)
-        return text.replace("&lt;", "<").replace("&gt;", ">").strip()
-
+        return option_match.group(1).replace("&lt;", "<").replace("&gt;", ">").strip()
     return "未知場次"
 
 def build_embed(platform, event_title, url, available_tickets):
@@ -73,98 +62,95 @@ def build_embed(platform, event_title, url, available_tickets):
         "fields": [
             {"name": "🎤 場次名稱：", "value": event_title, "inline": False},
             {"name": "🔗 網站：", "value": f"[點我前往購票]({url})", "inline": False},
-            {"name": "🎟️ 可購買的票區", "value": "\n".join(available_tickets) if available_tickets else "無可購買票區", "inline": False},
+            {"name": "🎟️ 可購買的票區", "value": "\n".join(available_tickets), "inline": False},
             {"name": "", "value": f"⏰更新時間：{now.strftime('%Y-%m-%d %H:%M:%S')}", "inline": False}
         ],
     }
 
-async def send_single_message(session, url, payload):
-    try:
-        async with session.post(url, json=payload) as response:
-            if response.status == 204:
-                print(f"✅ 成功發送到: {url}")
-            else:
-                error_text = await response.text()
-                print(f"❌ 發送失敗 ({url}) 狀態碼: {response.status}，訊息: {error_text}")
-    except aiohttp.ClientError as e:
-        print(f"❌ 發送錯誤 ({url}): {e}")
-
-async def send_discord_message(session, embed, urls=None):
+async def send_discord_message(session, embed):
     payload = {
         "username": "🚨【清票搶購】票務小幫手🚨",
         "embeds": [embed]
     }
-    if urls is None:
-        urls = [DISCORD_WEBHOOK_URL_MAIN]
-
-    tasks = [send_single_message(session, url, payload) for url in urls]
-    await asyncio.gather(*tasks)
+    async with session.post(DISCORD_WEBHOOK_URL_MAIN, json=payload) as resp:
+        if resp.status != 204:
+            print(f"❌ Discord通知失敗: {await resp.text()}")
 
 async def check_teamear_single(session, url):
     url_key = url.split("/")[-1]
-
     first_check = True
 
     while True:
         try:
-            async with session.get(url, headers=headers, timeout=10) as response:
-                html = await response.text()
+            async with session.get(url, headers=headers, timeout=10) as resp:
+                html = await resp.text()
 
             event_title = extract_event_title(html)
 
-            pattern = r'<li>.*?<font.*?>(.*?)</font>'
-            matches = re.findall(pattern, html, re.DOTALL)
+            # 剩餘票區（class="select_form_b"）取票名、剩餘數字
+            pattern_available = r'<li class="select_form_b">.*?<a.*?>(.*?)</a>'
+            matches_available = re.findall(pattern_available, html, re.DOTALL)
 
-            changed = False
+            # 已售完票區（不含 class="select_form_b"）
+            pattern_soldout = r'<li(?! class="select_form_b").*?<font.*?>(.*?)</font>'
+            matches_soldout = re.findall(pattern_soldout, html, re.DOTALL)
+
+            all_tickets = []
             tickets_for_notify = []
+
+            for t in matches_available:
+                if "身障" in t:
+                    continue
+                cleaned = re.sub(r'<.*?>', '', t).strip()
+                all_tickets.append(cleaned)
+                tickets_for_notify.append(cleaned)
+
+            for t in matches_soldout:
+                if "身障" in t:
+                    continue
+                all_tickets.append(t.strip())
 
             if url_key not in last_sent_tickets['TEAMEAR']:
                 last_sent_tickets['TEAMEAR'][url_key] = {}
 
+            changed = False
+
             if first_check:
                 print(f"[首次初始化] {event_title}")
+                for ticket in all_tickets:
+                    print(f"  {ticket}")
 
-            for t in matches:
-                if "身障" in t:
-                    continue
+                # 首次初始化，不發通知，但記錄狀態
+                for ticket in all_tickets:
+                    ticket_name = normalize_ticket_text(ticket)
+                    status = parse_ticket_status(ticket)
+                    last_sent_tickets['TEAMEAR'][url_key][ticket_name] = status
 
-                ticket_name = normalize_ticket_text(t)
-                status = parse_ticket_status(t)
-
-                last_status = last_sent_tickets['TEAMEAR'][url_key].get(ticket_name)
-
-                if first_check:
-                    print(f"  {t.strip()}")
-                else:
+            else:
+                for ticket in tickets_for_notify:
+                    ticket_name = normalize_ticket_text(ticket)
+                    status = parse_ticket_status(ticket)
+                    last_status = last_sent_tickets['TEAMEAR'][url_key].get(ticket_name)
                     if last_status != status:
                         changed = True
+                        print(f"🔔 {event_title} | {ticket_name} 狀態變化: {last_status} ➔ {status}")
+                    last_sent_tickets['TEAMEAR'][url_key][ticket_name] = status
 
-                        # 只推剩餘的票
-                        if status == "available":
-                            tickets_for_notify.append(t)
-
-                        print(f"🔔 [{url_key}] {event_title} | {ticket_name} 狀態變化: {last_status} ➔ {status}")
-
-                last_sent_tickets['TEAMEAR'][url_key][ticket_name] = status
-
-            if changed and not first_check and tickets_for_notify:
-                embed = build_embed("Teamear", event_title, url, tickets_for_notify)
-                await send_discord_message(session, embed)
+                if changed and tickets_for_notify:
+                    embed = build_embed("Teamear", event_title, url, tickets_for_notify)
+                    await send_discord_message(session, embed)
 
             first_check = False
 
         except Exception as e:
-            print(f"⚠️ [{url_key}] 發生錯誤: {e}")
+            print(f"⚠️ [{url_key}] 錯誤: {e}")
 
         await asyncio.sleep(1)
 
 async def main():
-    try:
-        async with aiohttp.ClientSession() as session:
-            tasks = [check_teamear_single(session, url) for url in TEAMEAR_URLS]
-            await asyncio.gather(*tasks)
-    except Exception as e:
-        print(f"⚠️ 主程式錯誤: {e}")
+    async with aiohttp.ClientSession() as session:
+        tasks = [check_teamear_single(session, url) for url in TEAMEAR_URLS]
+        await asyncio.gather(*tasks)
 
 if __name__ == "__main__":
     asyncio.run(main())
