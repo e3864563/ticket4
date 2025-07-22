@@ -11,7 +11,7 @@ TEAMEAR_URLS = [
     "https://teamear.tixcraft.com/ticket/area/25_crowdticc/19970", 
 ]
 
-DISCORD_WEBHOOK_URL_MAIN = "https://discord.com/api/webhooks/1376944537142034512/llRKwpmLteNX-uID94ns2m2cppeeIyx_la2jU5225WoBCTT3GHMOU8YBzJNhefxHUg5A"
+DISCORD_WEBHOOK_URL_MAIN = "https://discord.com/api/webhooks/1371436288330436618/_WsfwLwakJLC1vW7g01iZcDzPTiSnxhR4ijRv0gtsxv4Yo27J49Dx8zubkZqb_m-GW00"
 
 last_sent_tickets = {
     'TEAMEAR': {}
@@ -138,12 +138,16 @@ async def check_teamear_single(session, url):
                 else:
                     if last_status != status:
                         changed = True
-                        tickets_for_notify.append(t)
+
+                        # 只推剩餘的票
+                        if status == "available":
+                            tickets_for_notify.append(t)
+
                         print(f"🔔 [{url_key}] {event_title} | {ticket_name} 狀態變化: {last_status} ➔ {status}")
 
                 last_sent_tickets['TEAMEAR'][url_key][ticket_name] = status
 
-            if changed and not first_check:
+            if changed and not first_check and tickets_for_notify:
                 embed = build_embed("Teamear", event_title, url, tickets_for_notify)
                 await send_discord_message(session, embed)
 
