@@ -82,7 +82,7 @@ async def check_teamear_single(session, url):
 
     while True:
         try:
-            async with session.get(url, headers=headers, timeout=10) as resp:
+            async with session.get(url, headers=headers) as resp:
                 html_text = await resp.text()
 
             event_title = extract_event_title(html_text)
